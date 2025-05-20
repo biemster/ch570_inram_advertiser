@@ -353,7 +353,7 @@ void RegInit() {
 	DevSetMode(0);
 }
 
-void BLECoreInit(uint8_t TxPower) {
+void RFCoreInit(uint8_t TxPower) {
 	DevInit(TxPower);
 	RegInit();
 	NVIC->IPRIOR[0x15] |= 0x80;

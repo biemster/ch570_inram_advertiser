@@ -23,7 +23,7 @@ int main()
 	funGpioInitAll();
 	funPinMode( LED, GPIO_CFGLR_OUT_2Mhz_PP );
 
-	BLECoreInit(LL_TX_POWER_0_DBM);
+	RFCoreInit(LL_TX_POWER_0_DBM);
 
 #if 1
 	// Apple Find My Stuff Packet
