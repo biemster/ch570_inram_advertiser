@@ -151,7 +151,7 @@ typedef struct{
 	volatile uint32_t TXCTUNE_CO_CTRL;
 	volatile uint32_t TXCTUNE_GA_CTRL;
 	volatile uint32_t RF38;
-	volatile uint32_t RF39;
+	volatile uint32_t RXTUNE;
 	volatile uint32_t TXCTUNE_CO[10];
 	volatile uint32_t TXCTUNE_GA[3];
 } RF_Type;
@@ -160,12 +160,19 @@ uint8_t channel_map[] = {1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,18,19,20,21,22,2
 #define CO_MID (uint8_t)(RF->TXTUNE_CTRL & ~0xffffffc0)
 #define GA_MID (uint8_t)((RF->TXTUNE_CTRL & ~0x80ffffff) >> 24)
 
+void DevSetMode(uint16_t mode);
 __attribute__((aligned(4))) uint32_t LLE_BUF[0x10c];
+volatile uint32_t tuneFilter;
+volatile uint32_t rx_ready;
 
 __attribute__((interrupt))
 void LLE_IRQHandler() {
 	LL->STATUS &= LL->INT_EN;
 	BB->CTRL_TX = (BB->CTRL_TX & 0xfffffffc) | 1;
+	DevSetMode(0);
+	LL->CTRL_MOD &= 0xfffff8ff;
+	LL->LL0 |= 0x08;
+	rx_ready = 1;
 }
 
 void DevInit(uint8_t TxPower) {
@@ -317,9 +324,32 @@ void RFEND_TXTune() {
 	RF->RF1 |= 0x100;
 }
 
+void RFEND_RXTune() {
+	RF->RF20 &= 0xfffeffff;
+	RF->RF2 |= 0x200000;
+	RF->RF3 = (RF->RF3 & 0xffffffef) | 0x10;
+	RF->RF1 |= 0x1000;
+
+	LL->TMR = 100;
+	while(LL->TMR && ((RF->RXTUNE >> 8) & 1));
+
+	tuneFilter = RF->RXTUNE & 0x1f;
+	RF->RF20 |= 0x10000;
+	RF->RF20 = (RF->RF20 & 0xffffffe0) | tuneFilter;
+	RF->RF2 &= 0xffdfffff;
+	// tuneFilter2M = max(tuneFilter +2, 0x1f)
+
+	// RXADC
+	RF->RF22 &= 0xfffeffff;
+	RF->RF2 |= 0x10000;
+	RF->RF3 = (RF->RF3 & 0xfffffeff) | 0x100;
+	RF->RF1 = (RF->RF1 & 0xfffeffff) | 0x100000;
+}
+
 void RegInit() {
 	DevSetMode(0x0558);
 	RFEND_TXTune();
+	RFEND_RXTune();
 	DevSetMode(0);
 }
 
@@ -335,7 +365,7 @@ void DevSetChannel(uint8_t channel) {
 	BB->CTRL_CFG = (BB->CTRL_CFG & 0xffffff80) | (channel & 0x7f);
 }
 
-void Advertise(uint8_t adv[], size_t len, uint8_t channel) {
+void Frame_TX(uint8_t adv[], size_t len, uint8_t channel) {
 	__attribute__((aligned(4))) uint8_t  ADV_BUF[len+2]; // for the advertisement, which is 37 bytes + 2 header bytes
 
 	BB->CTRL_TX = (BB->CTRL_TX & 0xfffffffc) | 1;
@@ -353,7 +383,7 @@ void Advertise(uint8_t adv[], size_t len, uint8_t channel) {
 	BB->CRCPOLY1 = (BB->CRCPOLY1 & 0xff000000) | 0x80032d; // crc poly
 	BB->CRCPOLY2 = (BB->CRCPOLY2 & 0xff000000) | 0x80032d;
 
-	LL->LL1 |= 1; // Unknown why this needs to happen.
+	LL->LL1 = (LL->LL1 & 0xfffffffe) | 1; // Unknown why this needs to happen.
 
 	ADV_BUF[0] = 0x02; // PDU 0x00, 0x02, 0x06 seem to work, with only 0x02 showing up on the phone
 	ADV_BUF[1] = len ;
@@ -379,10 +409,45 @@ void Advertise(uint8_t adv[], size_t len, uint8_t channel) {
 	BB->CTRL_CFG |= 0x1000000;
 	BB->CTRL_TX &= 0xfffffffc;
 
-	LL->LL0 = 0x02; // Not sure what this does.  Does not seem to be critical.
+	LL->LL0 = 2; // Not sure what this does, but on RX it's 1
 
 	while(LL->TMR); // wait for tx buffer to empty
 	DevSetMode(0);
 	LL->CTRL_MOD &= 0xfffff8ff;
 	LL->LL0 |= 0x08;
+}
+
+void Frame_RX(uint8_t frame_info[], uint8_t channel) {
+	if(LL->LL0 & 3) {
+		LL->CTRL_MOD &= 0xfffff8ff;
+		LL->LL0 |= 0x08;
+	}
+	LL->TMR = 0;
+
+	DevSetChannel(channel);
+
+	DevSetMode(0x0158);
+
+	BB->CTRL_CFG = (BB->CTRL_CFG & 0xfffffcff) | 0x100;
+
+	// Confiugre 1MHz mode.  Unset 0x2000000 to switch to 2MHz bandwidth mode.)
+	// Note: There's probably something else that must be set if in 2MHz mode.
+	BB->BB9 = (BB->BB9 & 0xf9ffffff) | 0x2000000;
+
+	RF->RF20 = (RF->RF20 & 0xffffffe0) | (tuneFilter & 0x1f);
+	BB->BB5 = (BB->BB5 & 0xffffffc0) | 0xb;
+	BB->BB7 = (BB->BB7 & 0xfffffc00) | 0x9c;
+
+	BB->ACCESSADDRESS1 = 0x8E89BED6; // access address
+	BB->ACCESSADDRESS2 = 0x8E89BED6;
+	BB->CRCINIT1 = 0x555555; // crc init
+	BB->CRCINIT2 = 0x555555;
+	BB->CRCPOLY1 = (BB->CRCPOLY1 & 0xff000000) | 0x80032d; // crc poly
+	BB->CRCPOLY2 = (BB->CRCPOLY2 & 0xff000000) | 0x80032d;
+
+	LL->LL1 = (LL->LL1 & 0xfffffffe) | 1; // Unknown why this needs to happen.
+	LL->FRAME_BUF = (uint32_t)frame_info;
+
+	LL->LL0 = 1; // Not sure what this does, but on TX it's 2
+	rx_ready = 0;
 }

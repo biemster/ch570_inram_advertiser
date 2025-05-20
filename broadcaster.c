@@ -7,9 +7,6 @@
 #define LED               PA9
 #define LL_TX_POWER_0_DBM 0x12
 
-extern void BLECoreInit(uint8_t TxPower);
-extern void Advertise(uint8_t adv[], size_t len, uint8_t channel);
-
 void blink(int n) {
 	for(int i = n-1; i >= 0; i--) {
 		funDigitalWrite( LED, FUN_LOW ); // Turn on LED
@@ -61,12 +58,12 @@ int main()
 #if 1
 		// Only transmit on advertising channels.
 		for(int c = 0; c < sizeof(adv_channels); c++) {
-			Advertise(adv, sizeof(adv), adv_channels[c]);
+			Frame_TX(adv, sizeof(adv), adv_channels[c]);
 		}
 #else
 		// Sequence across spectrum
 		for(int c = 0; c < 41; c++) {
-			Advertise(adv, sizeof(adv), c );
+			Frame_TX(adv, sizeof(adv), c );
 		}
 #endif
 		blink(1);

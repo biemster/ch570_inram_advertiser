@@ -1,4 +1,4 @@
-all : runfromram
+all : clean runfromram
 
 TARGET:=broadcaster
 TARGET_MCU:=CH570
